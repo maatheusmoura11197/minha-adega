@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # Configuração da Página
-st.set_page_config(page_title="Gestão da Adega", layout="black")
+st.set_page_config(page_title="Gestão da Adega", layout="wide")
 st.title("🍷 Minha Adega na Nuvem")
 
 # --- PASSO IMPORTANTE: MEMÓRIA TEMPORÁRIA ---
