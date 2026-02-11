@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, date
 
 # --- Configuração Inicial ---
-st.set_page_config(page_title="Gestão da Adega 10.0", layout="wide")
+st.set_page_config(page_title="Gestão da Adega 11.0", layout="wide")
 
 # --- Memória do Sistema ---
 if 'estoque' not in st.session_state:
@@ -27,11 +27,10 @@ def listar_produtos():
 # CALLBACKS (AÇÕES)
 # ==============================================================================
 def acao_salvar_compra():
-    """Salva uma NOVA compra ou adiciona ao estoque"""
+    """Salva uma NOVA compra e REGISTRA NO HISTÓRICO DO FORNECEDOR"""
     nome_digitado = st.session_state.get('input_nome', '').strip()
     nome_base = nome_digitado.title()
     fornecedor = st.session_state.get('input_fornecedor', '').title()
-    # RECUPERANDO A DATA AQUI
     data_compra = st.session_state.get('input_data_compra', date.today())
     
     tipo_embalagem = st.session_state.get('radio_embalagem')
@@ -68,20 +67,35 @@ def acao_salvar_compra():
         lucro = preco_venda - custo_unitario
         margem = (lucro / custo_unitario) * 100 if custo_unitario > 0 else 0
         
-        # Salvar/Atualizar
+        # --- CRIANDO O REGISTRO DE HISTÓRICO DESTA COMPRA ---
+        registro_compra = {
+            "Data": data_compra.strftime('%d/%m/%Y'),
+            "Fornecedor": fornecedor,
+            "Qtd Comprada": total_add,
+            "Custo Un (Na época)": round(custo_unitario, 2),
+            "Total Pago": round(total_add * custo_unitario, 2)
+        }
+
+        # Salvar/Atualizar Estoque Principal
         encontrado = False
         for item in st.session_state.estoque:
             if item["Nome"] == nome_final:
                 item["Estoque"] += total_add
-                item["Custo Un"] = round(custo_unitario, 2)
+                item["Custo Un"] = round(custo_unitario, 2) # Atualiza para o custo mais recente
                 item["Preço Venda"] = preco_venda
                 item["Lucro R$"] = round(lucro, 2)
                 item["Margem %"] = round(margem, 1)
-                item["Fornecedor"] = fornecedor
-                item["Data Compra"] = data_compra # Atualiza a data
+                item["Fornecedor"] = fornecedor # Atualiza fornecedor atual
+                item["Data Compra"] = data_compra
                 item["Qtd por Fardo"] = fardo_ref
+                
+                # ADICIONA AO HISTÓRICO DO ITEM
+                if "Historico Compras" not in item:
+                    item["Historico Compras"] = []
+                item["Historico Compras"].append(registro_compra)
+                
                 encontrado = True
-                st.toast(f"Estoque somado: {nome_final}", icon="🔄")
+                st.toast(f"Estoque somado e histórico salvo: {nome_final}", icon="🔄")
                 break
         
         if not encontrado:
@@ -96,10 +110,10 @@ def acao_salvar_compra():
                 "Margem %": round(margem, 1),
                 "Estoque": total_add,
                 "Qtd por Fardo": fardo_ref,
-                "Foto": None 
+                "Historico Compras": [registro_compra] # Cria a lista já com o primeiro registro
             }
             st.session_state.estoque.append(novo)
-            st.toast(f"Novo Item: {nome_final}", icon="✅")
+            st.toast(f"Novo Item cadastrado: {nome_final}", icon="✅")
 
         # Limpeza
         st.session_state['input_nome'] = ""
@@ -145,40 +159,35 @@ def acao_confirmar_venda():
 
 def acao_editar_produto():
     """Salva as edições feitas na aba Estoque"""
-    # Recupera o índice do produto original que foi selecionado para edição
     nome_original = st.session_state.get('sel_produto_editar')
-    
-    # Recupera os novos valores dos inputs de edição
     novo_nome = st.session_state.get('edit_nome')
     novo_tipo = st.session_state.get('edit_tipo')
     novo_preco = converter_valor(st.session_state.get('edit_preco'))
     novo_custo = converter_valor(st.session_state.get('edit_custo'))
     novo_estoque = st.session_state.get('edit_estoque')
     
-    # Encontra e atualiza
     for item in st.session_state.estoque:
         if item["Nome"] == nome_original:
-            item["Nome"] = novo_nome # Permite corrigir o nome
+            item["Nome"] = novo_nome 
             item["Tipo"] = novo_tipo
             item["Preço Venda"] = novo_preco
             item["Custo Un"] = novo_custo
             item["Estoque"] = novo_estoque
             
-            # Recalcula lucro
             lucro = novo_preco - novo_custo
             margem = (lucro / novo_custo) * 100 if novo_custo > 0 else 0
             item["Lucro R$"] = round(lucro, 2)
             item["Margem %"] = round(margem, 1)
             
-            st.toast("Produto Editado com Sucesso!", icon="✏️")
+            st.toast("Editado com Sucesso!", icon="✏️")
             break
 
 # ==============================================================================
 # INTERFACE
 # ==============================================================================
-st.title("🍷 Controle de Adega - Versão 10.0")
+st.title("🍷 Controle de Adega - Versão 11.0")
 
-aba_cadastro, aba_estoque, aba_baixa = st.tabs(["📝 Nova Compra", "📋 Estoque & Editar", "📉 Caixa"])
+aba_cadastro, aba_estoque, aba_baixa = st.tabs(["📝 Nova Compra", "📋 Estoque & Histórico", "📉 Caixa"])
 
 # --- ABA 1: CADASTRAR ---
 with aba_cadastro:
@@ -191,7 +200,6 @@ with aba_cadastro:
     with col_a:
         st.text_input("Nome do Produto", key="input_nome")
         st.text_input("Fornecedor", key="input_fornecedor")
-        # --- DATA DA COMPRA DE VOLTA ---
         st.date_input("Data da Compra", date.today(), key="input_data_compra")
 
     with col_b:
@@ -212,18 +220,17 @@ with aba_cadastro:
     st.button("💾 Salvar Entrada", type="primary", on_click=acao_salvar_compra)
 
 
-# --- ABA 2: ESTOQUE E EDIÇÃO ---
+# --- ABA 2: ESTOQUE, EDIÇÃO E HISTÓRICO ---
 with aba_estoque:
     st.header("Estoque Detalhado")
     
     # 1. FERRAMENTA DE EDIÇÃO
-    with st.expander("✏️ CLIQUE AQUI PARA EDITAR UM PRODUTO", expanded=False):
+    with st.expander("✏️ Editar Produto (Clique aqui)", expanded=False):
         if st.session_state.estoque:
             col_sel, col_btn = st.columns([3, 1])
             with col_sel:
                 prod_editar = st.selectbox("Escolha o produto para corrigir:", listar_produtos(), key="sel_produto_editar")
             
-            # Achar dados atuais
             item_atual = next((p for p in st.session_state.estoque if p["Nome"] == prod_editar), None)
             
             if item_atual:
@@ -239,11 +246,11 @@ with aba_estoque:
                     st.number_input("Estoque Total (Un):", value=item_atual['Estoque'], min_value=0, key="edit_estoque")
                     st.button("✅ Salvar Alterações", on_click=acao_editar_produto)
         else:
-            st.info("Cadastre produtos primeiro para poder editar.")
+            st.info("Cadastre produtos primeiro.")
 
     st.divider()
 
-    # 2. TABELA DE VISUALIZAÇÃO
+    # 2. TABELA DE VISUALIZAÇÃO GERAL
     termo_busca = st.text_input("🔍 Buscar na tabela:", placeholder="Nome...").title()
     
     if st.session_state.estoque:
@@ -252,7 +259,6 @@ with aba_estoque:
             df = df[df['Nome'].str.contains(termo_busca, case=False)]
 
         if not df.empty:
-            # Coluna Visual Fardos
             def criar_resumo(row):
                 q = row.get('Qtd por Fardo', 12)
                 t = row['Estoque']
@@ -260,13 +266,12 @@ with aba_estoque:
 
             df['Visual'] = df.apply(criar_resumo, axis=1)
             
-            # Formatando Data para ficar bonita (Dia/Mês/Ano)
-            # Verifica se 'Data Compra' existe e converte
             if 'Data Compra' in df.columns:
-                 df['Data Compra'] = pd.to_datetime(df['Data Compra']).dt.strftime('%d/%m/%Y')
+                 df['Data Última Compra'] = pd.to_datetime(df['Data Compra']).dt.strftime('%d/%m/%Y')
+            else:
+                 df['Data Última Compra'] = "-"
 
-            # DEFININDO AS COLUNAS QUE VOCÊ QUER VER
-            colunas_tabela = ["Nome", "Tipo", "Visual", "Preço Venda", "Lucro R$", "Data Compra", "Fornecedor"]
+            colunas_tabela = ["Nome", "Tipo", "Visual", "Preço Venda", "Lucro R$", "Data Última Compra"]
             
             st.dataframe(
                 df[colunas_tabela],
@@ -275,10 +280,43 @@ with aba_estoque:
                 column_config={
                     "Preço Venda": st.column_config.NumberColumn("Venda", format="R$ %.2f"),
                     "Lucro R$": st.column_config.NumberColumn("Lucro Un.", format="R$ %.2f"),
-                    "Tipo": st.column_config.TextColumn("Tipo", width="small"),
                     "Visual": st.column_config.TextColumn("Estoque (Fardos)", width="medium"),
                 }
             )
+
+            # 3. HISTÓRICO DE FORNECEDORES (NOVA ÁREA)
+            st.divider()
+            st.subheader("📜 Histórico de Compras por Item")
+            
+            col_h1, col_h2 = st.columns([1, 2])
+            with col_h1:
+                # Selectbox para escolher qual produto ver o histórico
+                # Filtramos apenas os nomes visíveis na busca para facilitar
+                lista_filtro = df['Nome'].tolist()
+                item_hist_sel = st.selectbox("Ver histórico de compras de:", lista_filtro)
+            
+            with col_h2:
+                # Busca o item selecionado e mostra a lista de compras dele
+                item_hist_dados = next((p for p in st.session_state.estoque if p["Nome"] == item_hist_sel), None)
+                
+                if item_hist_dados and "Historico Compras" in item_hist_dados:
+                    hist_df = pd.DataFrame(item_hist_dados["Historico Compras"])
+                    # Reordena para o mais recente primeiro (inverte lista)
+                    hist_df = hist_df.iloc[::-1]
+                    
+                    st.write(f"Compras anteriores de: **{item_hist_sel}**")
+                    st.dataframe(
+                        hist_df, 
+                        hide_index=True, 
+                        use_container_width=True,
+                        column_config={
+                            "Total Pago": st.column_config.NumberColumn("Total Pago", format="R$ %.2f"),
+                            "Custo Un (Na época)": st.column_config.NumberColumn("Custo Un", format="R$ %.2f"),
+                        }
+                    )
+                else:
+                    st.info("Nenhum histórico antigo registrado para este item (apenas a compra atual).")
+
         else:
             st.warning("Produto não encontrado.")
     else:
@@ -305,7 +343,7 @@ with aba_baixa:
                 st.button("CONFIRMAR VENDA", type="primary", on_click=acao_confirmar_venda)
     
     with c_hist:
-        st.header("Histórico")
+        st.header("Vendas Hoje")
         if st.session_state.historico_vendas:
             if st.button("↩️ Desfazer Última"):
                 v = st.session_state.historico_vendas.pop()
