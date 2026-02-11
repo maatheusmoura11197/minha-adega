@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, date
 
 # --- Configuração Inicial ---
-st.set_page_config(page_title="Gestão da Adega 12.0", layout="wide")
+st.set_page_config(page_title="Gestão da Adega 13.0", layout="wide")
 
 # --- Memória do Sistema ---
 if 'estoque' not in st.session_state:
@@ -24,51 +24,54 @@ def listar_produtos():
     return sorted([p["Nome"] for p in st.session_state.estoque])
 
 # ==============================================================================
-# CALLBACKS (AÇÕES AUTOMÁTICAS)
+# FUNÇÕES DE CALLBACK (GATILHOS)
 # ==============================================================================
 
-def preencher_formulario_cadastro():
+def atualizar_campos_edicao():
     """
-    MÁGICA: Esta função roda quando você seleciona um produto na lista do cadastro.
-    Ela busca os dados antigos e preenche os campos automaticamente.
+    CORREÇÃO DO BUG: Esta função roda assim que você escolhe um produto para editar.
+    Ela preenche os campos de edição com os dados do produto escolhido.
     """
-    escolha = st.session_state.get('sel_produto_existente')
+    nome_produto = st.session_state.get('sel_produto_editar')
+    # Encontrar o produto na lista
+    item = next((p for p in st.session_state.estoque if p["Nome"] == nome_produto), None)
     
-    if escolha and escolha != "🆕 CADASTRAR NOVO":
-        # Procurar o item no estoque
-        item = next((p for p in st.session_state.estoque if p["Nome"] == escolha), None)
+    if item:
+        # Forçamos os valores dentro dos inputs de edição
+        st.session_state['edit_nome'] = item['Nome']
         
+        # O index do tipo (Lata, Long Neck...)
+        tipos = ["Lata", "Long Neck", "Nenhum dos outros"]
+        try:
+            st.session_state['edit_tipo'] = item.get('Tipo', 'Lata')
+        except:
+            st.session_state['edit_tipo'] = "Lata"
+            
+        st.session_state['edit_preco'] = f"{item['Preço Venda']:.2f}".replace('.', ',')
+        st.session_state['edit_custo'] = f"{item['Custo Un']:.2f}".replace('.', ',')
+        st.session_state['edit_estoque'] = item['Estoque']
+
+def preencher_formulario_cadastro():
+    """Preenche o formulário de cadastro ao selecionar item existente"""
+    escolha = st.session_state.get('sel_produto_existente')
+    if escolha and escolha != "🆕 CADASTRAR NOVO":
+        item = next((p for p in st.session_state.estoque if p["Nome"] == escolha), None)
         if item:
-            # Preencher Nome
-            # Removemos (EXTRA) ou (LN) do nome para edição limpa, se quiseres
             nome_limpo = item["Nome"].replace(" (EXTRA)", "").replace(" (LN)", "")
             st.session_state['input_nome'] = nome_limpo
-            
-            # Preencher Tipo (Lata/LN)
             st.session_state['radio_embalagem'] = item.get("Tipo", "Lata")
-            
-            # Preencher Preço de Venda
             st.session_state['input_preco_venda'] = f"{item['Preço Venda']:.2f}".replace('.', ',')
             
-            # Preencher Configuração do Fardo (Referência)
-            # Nota: O Selectbox precisa do index (posição na lista)
+            # Tenta recuperar o tamanho do fardo
             qtd_fardo = item.get('Qtd por Fardo', 12)
-            try:
-                # Tenta achar o index na lista de 1 a 24. O numero 1 está no index 0.
-                st.session_state['sel_dentro_fardo'] = qtd_fardo
-                st.session_state['sel_fardo_ref'] = qtd_fardo
-            except:
-                pass
-
-            # Opcional: Preencher custo antigo como referência
-            st.session_state['input_custo_unit'] = f"{item['Custo Un']:.2f}".replace('.', ',')
+            st.session_state['sel_dentro_fardo'] = qtd_fardo
+            st.session_state['sel_fardo_ref'] = qtd_fardo
             
-            # Fornecedor deixamos em branco ou preenchemos o último? 
-            # Como você disse que muda o fornecedor, vou deixar o último como sugestão, mas você edita.
+            # Sugere o custo ATUAL (Médio) como base
+            st.session_state['input_custo_unit'] = f"{item['Custo Un']:.2f}".replace('.', ',')
             st.session_state['input_fornecedor'] = item.get("Fornecedor", "")
-
     else:
-        # SE FOR NOVO, LIMPA TUDO
+        # Limpa tudo se for novo
         st.session_state['input_nome'] = ""
         st.session_state['input_fornecedor'] = ""
         st.session_state['input_custo_fardo'] = ""
@@ -76,36 +79,32 @@ def preencher_formulario_cadastro():
         st.session_state['input_preco_venda'] = ""
 
 def acao_salvar_compra():
-    """Salva a compra"""
+    """Salva compra com CÁLCULO DE CUSTO MÉDIO"""
     nome_digitado = st.session_state.get('input_nome', '').strip()
     nome_base = nome_digitado.title()
     fornecedor = st.session_state.get('input_fornecedor', '').title()
     data_compra = st.session_state.get('input_data_compra', date.today())
-    
     tipo_embalagem = st.session_state.get('radio_embalagem')
     tipo_compra = st.session_state.get('radio_tipo_compra')
     
-    # Preços e Quantidades
+    # 1. Obter valores da NOVA compra
     if tipo_compra == "Fardo Fechado":
         custo_fardo = converter_valor(st.session_state.get('input_custo_fardo'))
         qtd_dentro = st.session_state.get('sel_dentro_fardo')
-        qtd_compra = st.session_state.get('sel_qtd_compra_fardo')
+        qtd_compra_pct = st.session_state.get('sel_qtd_compra_fardo')
         
-        custo_unitario = custo_fardo / qtd_dentro if qtd_dentro else 0
-        total_add = qtd_compra * qtd_dentro
+        custo_unitario_novo = custo_fardo / qtd_dentro if qtd_dentro else 0
+        qtd_adicionada = qtd_compra_pct * qtd_dentro
         fardo_ref = qtd_dentro
     else:
-        custo_unit = converter_valor(st.session_state.get('input_custo_unit'))
-        qtd_compra = st.session_state.get('sel_qtd_compra_unit')
-        
-        custo_unitario = custo_unit
-        total_add = qtd_compra
+        custo_unitario_novo = converter_valor(st.session_state.get('input_custo_unit'))
+        qtd_adicionada = st.session_state.get('sel_qtd_compra_unit')
         fardo_ref = st.session_state.get('sel_fardo_ref')
 
     preco_venda = converter_valor(st.session_state.get('input_preco_venda'))
     
-    if nome_base and (custo_unitario > 0 or total_add > 0):
-        # Lógica de Sufixo
+    if nome_base and (custo_unitario_novo > 0 or qtd_adicionada > 0):
+        # Definição do Nome Final
         if tipo_embalagem == "Nenhum dos outros" and "(EXTRA)" not in nome_base:
             nome_final = f"{nome_base} (EXTRA)"
         elif tipo_embalagem == "Long Neck" and "(LN)" not in nome_base:
@@ -113,25 +112,43 @@ def acao_salvar_compra():
         else:
             nome_final = nome_base
 
-        lucro = preco_venda - custo_unitario
-        margem = (lucro / custo_unitario) * 100 if custo_unitario > 0 else 0
-        
-        # Histórico desta compra específica
+        # Registro Histórico
         registro_compra = {
             "Data": data_compra.strftime('%d/%m/%Y'),
             "Fornecedor": fornecedor,
-            "Qtd Comprada": total_add,
-            "Custo Un": round(custo_unitario, 2),
-            "Total Pago": round(total_add * custo_unitario, 2)
+            "Qtd Comprada": qtd_adicionada,
+            "Custo Un (Pago)": round(custo_unitario_novo, 2),
+            "Total Pago": round(qtd_adicionada * custo_unitario_novo, 2)
         }
 
-        # Atualizar Estoque
+        # Atualização do Estoque (CUSTO MÉDIO)
         encontrado = False
         for item in st.session_state.estoque:
             if item["Nome"] == nome_final:
-                item["Estoque"] += total_add
-                item["Custo Un"] = round(custo_unitario, 2)
+                # --- AQUI ESTÁ A MÁGICA DO CUSTO MÉDIO ---
+                estoque_atual = item["Estoque"]
+                custo_atual = item["Custo Un"]
+                
+                valor_total_estoque_antigo = estoque_atual * custo_atual
+                valor_total_compra_nova = qtd_adicionada * custo_unitario_novo
+                
+                novo_estoque_total = estoque_atual + qtd_adicionada
+                
+                if novo_estoque_total > 0:
+                    # O novo custo é a média ponderada entre o que tinha e o que chegou
+                    novo_custo_medio = (valor_total_estoque_antigo + valor_total_compra_nova) / novo_estoque_total
+                else:
+                    novo_custo_medio = custo_unitario_novo
+
+                # Atualiza os dados do item
+                item["Estoque"] = novo_estoque_total
+                item["Custo Un"] = round(novo_custo_medio, 2) # Agora usamos a média
                 item["Preço Venda"] = preco_venda
+                
+                # Recalcula lucro com base no custo médio
+                lucro = preco_venda - novo_custo_medio
+                margem = (lucro / novo_custo_medio) * 100 if novo_custo_medio > 0 else 0
+                
                 item["Lucro R$"] = round(lucro, 2)
                 item["Margem %"] = round(margem, 1)
                 item["Fornecedor"] = fornecedor
@@ -142,35 +159,36 @@ def acao_salvar_compra():
                 item["Historico Compras"].append(registro_compra)
                 
                 encontrado = True
-                st.toast(f"Estoque atualizado: {nome_final}", icon="🔄")
+                st.toast(f"Estoque atualizado! Custo Médio agora é R$ {novo_custo_medio:.2f}", icon="📊")
                 break
         
         if not encontrado:
+            # Se é novo, o custo médio é o próprio custo de compra
+            lucro = preco_venda - custo_unitario_novo
+            margem = (lucro / custo_unitario_novo) * 100 if custo_unitario_novo > 0 else 0
+            
             novo = {
                 "Nome": nome_final,
                 "Tipo": tipo_embalagem,
                 "Fornecedor": fornecedor,
                 "Data Compra": data_compra,
-                "Custo Un": round(custo_unitario, 2),
+                "Custo Un": round(custo_unitario_novo, 2),
                 "Preço Venda": preco_venda,
                 "Lucro R$": round(lucro, 2),
                 "Margem %": round(margem, 1),
-                "Estoque": total_add,
+                "Estoque": qtd_adicionada,
                 "Qtd por Fardo": fardo_ref,
                 "Historico Compras": [registro_compra],
                 "Foto": None 
             }
             st.session_state.estoque.append(novo)
-            st.toast(f"Cadastrado: {nome_final}", icon="✅")
+            st.toast(f"Item Cadastrado: {nome_final}", icon="✅")
 
-        # Limpar Campos
+        # Limpeza
         st.session_state['input_nome'] = ""
         st.session_state['input_fornecedor'] = ""
         st.session_state['input_custo_fardo'] = ""
         st.session_state['input_custo_unit'] = ""
-        # st.session_state['input_preco_venda'] = "" # Opcional: manter preço venda pra agilizar? Vou limpar por segurança.
-        
-        # Resetar seleção para 'Novo'
         st.session_state['sel_produto_existente'] = "🆕 CADASTRAR NOVO"
         
     else:
@@ -230,25 +248,21 @@ def acao_editar_produto():
 # ==============================================================================
 # INTERFACE
 # ==============================================================================
-st.title("🍷 Controle de Adega - Versão 12.0")
+st.title("🍷 Controle de Adega - Versão 13.0")
 
 aba_cadastro, aba_estoque, aba_baixa = st.tabs(["📝 Nova Compra", "📋 Estoque", "📉 Caixa"])
 
-# --- ABA 1: CADASTRAR (Com Auto-Preenchimento) ---
+# --- ABA 1: CADASTRAR ---
 with aba_cadastro:
     st.header("Entrada de Mercadoria")
     
-    # 1. SELEÇÃO INTELIGENTE
-    # Cria lista com opção de "Novo" no topo + Produtos existentes
     lista_opcoes_cadastro = ["🆕 CADASTRAR NOVO"] + listar_produtos()
-    
     st.selectbox(
-        "Deseja cadastrar um item Novo ou Repor Estoque?",
+        "Cadastrar Novo ou Repor?",
         options=lista_opcoes_cadastro,
         key="sel_produto_existente",
-        on_change=preencher_formulario_cadastro # O GATILHO MÁGICO
+        on_change=preencher_formulario_cadastro
     )
-    
     st.divider()
 
     st.radio("Tipo:", ["Lata", "Long Neck", "Nenhum dos outros"], horizontal=True, key='radio_embalagem')
@@ -256,8 +270,7 @@ with aba_cadastro:
     
     col_a, col_b = st.columns(2)
     with col_a:
-        # Se for produto existente, o nome já virá preenchido pelo callback
-        st.text_input("Nome do Produto", key="input_nome", placeholder="Digite o nome se for novo...")
+        st.text_input("Nome do Produto", key="input_nome", placeholder="Ex: Skol")
         st.text_input("Fornecedor", key="input_fornecedor", placeholder="Quem vendeu?")
         st.date_input("Data da Compra", date.today(), key="input_data_compra")
 
@@ -267,7 +280,6 @@ with aba_cadastro:
         
         if tipo_compra == "Fardo Fechado":
             st.text_input("Valor pago no FARDO? (R$)", placeholder="Ex: 50,00", key="input_custo_fardo")
-            # Note o key sel_dentro_fardo que o callback usa
             st.selectbox("Itens por fardo:", options=opcoes_fardo, index=11, key="sel_dentro_fardo")
             st.selectbox("Quantos FARDOS comprou?", options=opcoes_qtd, key="sel_qtd_compra_fardo")
         else: 
@@ -277,84 +289,73 @@ with aba_cadastro:
 
         st.text_input("Preço de Venda Unitário (R$)", placeholder="Ex: 7,00", key="input_preco_venda")
 
-    st.button("💾 Salvar Entrada", type="primary", on_click=acao_salvar_compra)
+    st.button("💾 Salvar Entrada (Custo Médio)", type="primary", on_click=acao_salvar_compra)
 
 
-# --- ABA 2: ESTOQUE ---
+# --- ABA 2: ESTOQUE (COM EDIÇÃO CORRIGIDA) ---
 with aba_estoque:
     st.header("Estoque e Histórico")
     
-    with st.expander("✏️ Editar Produto", expanded=False):
+    # FERRAMENTA DE EDIÇÃO CORRIGIDA
+    with st.expander("✏️ Editar Produto", expanded=True):
         if st.session_state.estoque:
             col_sel, col_btn = st.columns([3, 1])
             with col_sel:
-                prod_editar = st.selectbox("Produto para editar:", listar_produtos(), key="sel_produto_editar")
+                # O SEGREDO: on_change=atualizar_campos_edicao
+                st.selectbox(
+                    "Produto para editar:", 
+                    listar_produtos(), 
+                    key="sel_produto_editar",
+                    on_change=atualizar_campos_edicao
+                )
             
-            item_atual = next((p for p in st.session_state.estoque if p["Nome"] == prod_editar), None)
-            if item_atual:
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    st.text_input("Nome:", value=item_atual['Nome'], key="edit_nome")
-                    st.selectbox("Tipo:", ["Lata", "Long Neck", "Nenhum dos outros"], index=["Lata", "Long Neck", "Nenhum dos outros"].index(item_atual.get('Tipo', 'Lata')), key="edit_tipo")
-                with c2:
-                    st.text_input("Venda (R$):", value=str(item_atual['Preço Venda']), key="edit_preco")
-                    st.text_input("Custo Un (R$):", value=str(item_atual['Custo Un']), key="edit_custo")
-                with c3:
-                    st.number_input("Estoque (Un):", value=item_atual['Estoque'], min_value=0, key="edit_estoque")
-                    st.button("Salvar Edição", on_click=acao_editar_produto)
+            # Os inputs agora são ligados a keys que a função atualizar_campos_edicao preenche
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.text_input("Nome:", key="edit_nome")
+                st.selectbox("Tipo:", ["Lata", "Long Neck", "Nenhum dos outros"], key="edit_tipo")
+            with c2:
+                st.text_input("Venda (R$):", key="edit_preco")
+                st.text_input("Custo Médio (R$):", key="edit_custo", help="Custo calculado pela média das compras")
+            with c3:
+                st.number_input("Estoque (Un):", min_value=0, key="edit_estoque")
+                st.button("Salvar Edição", on_click=acao_editar_produto)
         else:
-            st.info("Lista vazia.")
+            st.info("Cadastre produtos primeiro.")
 
     st.divider()
-
+    # TABELA VISUAL
     termo_busca = st.text_input("🔍 Buscar:", placeholder="Nome...").title()
-    
     if st.session_state.estoque:
         df = pd.DataFrame(st.session_state.estoque)
         if termo_busca:
             df = df[df['Nome'].str.contains(termo_busca, case=False)]
 
         if not df.empty:
-            def criar_resumo(row):
-                q = row.get('Qtd por Fardo', 12)
-                t = row['Estoque']
-                return f"{int(t//q)} Fardos + {int(t%q)} Un" if t > 0 else "Esgotado"
-
-            df['Visual'] = df.apply(criar_resumo, axis=1)
-            if 'Data Compra' in df.columns:
-                 df['Data Última Compra'] = pd.to_datetime(df['Data Compra']).dt.strftime('%d/%m/%Y')
+            df['Visual'] = df.apply(lambda r: f"{int(r['Estoque']//r.get('Qtd por Fardo',12))} Fardos + {int(r['Estoque']%r.get('Qtd por Fardo',12))} Un", axis=1)
+            if 'Data Compra' in df.columns: df['Data Última Compra'] = pd.to_datetime(df['Data Compra']).dt.strftime('%d/%m/%Y')
             
             st.dataframe(
-                df[["Nome", "Tipo", "Visual", "Preço Venda", "Lucro R$", "Data Última Compra"]],
+                df[["Nome", "Tipo", "Visual", "Preço Venda", "Custo Un", "Lucro R$", "Data Última Compra"]],
                 use_container_width=True,
                 hide_index=True,
                 column_config={
                     "Preço Venda": st.column_config.NumberColumn("Venda", format="R$ %.2f"),
+                    "Custo Un": st.column_config.NumberColumn("Custo Médio", format="R$ %.2f"),
                     "Lucro R$": st.column_config.NumberColumn("Lucro", format="R$ %.2f"),
-                    "Visual": st.column_config.TextColumn("Estoque", width="medium"),
                 }
             )
-
+            # HISTÓRICO
             st.divider()
-            st.subheader("📜 Histórico de Fornecedores")
-            
             col_h1, col_h2 = st.columns([1, 2])
             with col_h1:
-                lista_filtro = df['Nome'].tolist()
-                item_hist_sel = st.selectbox("Ver compras de:", lista_filtro)
-            
+                item_hist_sel = st.selectbox("Histórico de Compras de:", df['Nome'].tolist())
             with col_h2:
-                item_hist_dados = next((p for p in st.session_state.estoque if p["Nome"] == item_hist_sel), None)
-                if item_hist_dados and "Historico Compras" in item_hist_dados:
-                    hist_df = pd.DataFrame(item_hist_dados["Historico Compras"])
-                    hist_df = hist_df.iloc[::-1]
-                    st.dataframe(hist_df, hide_index=True, use_container_width=True)
-                else:
-                    st.info("Sem histórico antigo.")
-        else:
-            st.warning("Não encontrado.")
-    else:
-        st.info("Vazio.")
+                dados = next((p for p in st.session_state.estoque if p["Nome"] == item_hist_sel), None)
+                if dados and "Historico Compras" in dados:
+                    st.dataframe(pd.DataFrame(dados["Historico Compras"])[::-1], hide_index=True, use_container_width=True)
+                else: st.info("Sem histórico.")
+        else: st.warning("Não encontrado.")
 
 # --- ABA 3: VENDAS ---
 with aba_baixa:
@@ -371,7 +372,6 @@ with aba_baixa:
                 c1.number_input("Fardos", min_value=0, step=1, key="input_venda_fardos")
                 c2.number_input("Soltas", min_value=0, step=1, key="input_venda_unidades")
                 st.button("CONFIRMAR VENDA", type="primary", on_click=acao_confirmar_venda)
-    
     with c_hist:
         st.header("Hoje")
         if st.session_state.historico_vendas:
@@ -381,5 +381,4 @@ with aba_baixa:
                     st.session_state.estoque[v["Indice"]]["Estoque"] += v["Qtd"]
                     st.success("Desfeito!")
                     st.rerun()
-            df_h = pd.DataFrame(st.session_state.historico_vendas)[::-1]
-            st.dataframe(df_h[["Data", "Produto", "Qtd", "Valor"]], hide_index=True)
+            st.dataframe(pd.DataFrame(st.session_state.historico_vendas)[::-1][["Data", "Produto", "Qtd", "Valor"]], hide_index=True)
